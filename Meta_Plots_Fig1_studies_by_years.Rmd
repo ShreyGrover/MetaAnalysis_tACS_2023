@@ -1,0 +1,59 @@
+---
+title: "Included studies by years"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r packages, warning=TRUE, include=FALSE}
+library("metafor")
+library("robumeta")
+library("readxl")
+library("plotly")
+```
+
+```{r data download, include=FALSE}
+
+directory = "/Users/renatafayz/Documents/tACS_MetaAnalysis"
+mlm.data <- read_excel(paste0(directory, "/Data_for_analysis/All_experiments_supplement_table.xlsx"))
+mlm.studies <- read_excel(paste0(directory, "/Data_for_analysis/Studies_by_years.xlsx"))
+
+```
+
+*Publications (included in meta-analysis) by years*
+
+```{r publications by years, echo = FALSE, fig.dim = c(10,8), dpi=300}
+# compute # studies per year
+studies_by_year <- data.frame("studies" = table(mlm.studies$year))
+colnames(studies_by_year) = c("year", "studies")
+
+# plot
+fig <- plot_ly(studies_by_year, x = ~year, y= ~studies, type = 'bar', marker = list(color = 'rgba(5,112,176,0.9)'), opacity = 0.6, width = 5.9*144, height = 4.1*144)
+
+fig <- fig %>% layout(yaxis = list(title = 'number studies'), xaxis = list(title = 'year'))
+fig
+
+# save as HTML
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/pubs_by_years.html"))
+
+# save as svg
+orca(fig, "pubs_by_years.svg",
+        width = 5.9*144,
+        height = 4.1*144)
+```
+*Extra plot: Effect counts by domains*
+
+```{r ES counts by domains, echo = FALSE, fig.dim = c(10,8), dpi=300}
+domains <- c("Working Memory", "Long-Term Memory", "Attention", "Executive Control", "Intelligence", "Motor Learning", "Motor Memory", "Learning", "Decision-Making")
+sub_df <- mlm.data[is.element(mlm.data$Domain, domains),]
+counts <- table(sub_df$`DV Category`, sub_df$Domain)
+par(mar=c(5,8,2,2)) # increase y-axis margin 5,8,2,2
+barplot(counts, col=c("gray35","gray55"), cex.names=0.8,cex.axis = 0.8, cex.lab=0.9, border = NA, xlab = "included effects", horiz=TRUE, las=1)
+legend("bottomright", legend = c("performance", "RT"), fill = c("gray35", "gray55"), cex = 0.7, bty='n')
+
+```

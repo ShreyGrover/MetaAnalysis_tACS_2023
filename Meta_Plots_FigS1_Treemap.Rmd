@@ -1,0 +1,152 @@
+---
+title: "&nbsp;"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r warning=TRUE, include=FALSE}
+library("readxl")
+library("plotly")
+library("tidyverse")
+library("dplyr")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300)
+```
+
+```{r data download, include = FALSE}
+
+directory = "/Users/shreygrover/Desktop/MetaAnalysis_SciTranslMed/Sci_Transl_Med_Submission_2/Analysis/Scripts_Revised/Meta_Datafiles_2021"
+treedata <- read_excel(paste0(directory, "/Data_for_analysis/Treemap_HypothesizedDisruptionEffects.xlsx"))
+```
+
+
+```{r parameters, echo = FALSE}
+domains = sort(unique(treedata$Domain))
+
+size_domains = rep(0,7) # box size for domains is 0 as each box will be stretched by the number of experiments
+
+# parameters for the treemap (see plotly docs https://plotly.com/r/reference/treemap/)
+labels = c(domains, treedata$Experiment)
+parents = c(rep('', length(domains)),treedata$Domain)
+values = c(size_domains, treedata$N) # size of the box will be scaled by the sample size of the experiment
+
+```
+
+```{r counts domains, include = FALSE}
+# N and k counts for each domain
+temp <- treedata %>% group_by(Domain, Study) %>% summarise(count_studies = n()) # temporary grouping by domain and study
+domains_N <- temp %>% group_by(Domain) %>% summarise(count_studies = n()) # Study counts grouped by domain 
+domains_k <- treedata %>% group_by(Domain) %>% summarise(count_experiments = n()) # Experiment counts grrouped by domain
+domains_df = data.frame("domain" = domains, "N" = domains_N[2], "k" = domains_k[2]) # data frame with domain names, N and k
+domains_df[2,1] <- "Clinical Symptoms" # replace acronym with full domain name
+domains_df[10,1] <- "Neuropsychological Assessment" # replace acronym with full domain name
+```
+
+```{r hoverdata, echo = FALSE}
+
+# hover data for the figure (appears when hovering over a single box)
+sample_size = c(size_domains, treedata$N)
+experiment <- treedata$Experiment
+name <- treedata$Author
+name2 <- treedata$Author2
+year <- treedata$Year
+exp_id <- treedata$Exp_id
+n <- paste0("N = ", treedata$N)
+population <- paste0("population: ", treedata$Population)
+age <- paste0("age: ", treedata$`Mean Age`, " (", treedata$SD, ")")
+montage <- paste0("montage: ", treedata$Montage)
+freq <- paste0("frequency: ", treedata$`Frequency (Hz)`, " Hz")
+intensity <- paste0("intensity: ", treedata$`Intensity (mA)`, " mA")
+duration <- paste0("duration: ", treedata$`Duration (min)`, " min")
+timing <- paste0("timing of stimulation: ", treedata$`Stimulation State`)
+t_effects <- paste0("timing of assessment: ", treedata$`Timing of Assessment`)
+phase <- paste0("phase: ", treedata$Phase)
+curr_mod <- paste0("current modeling: ", treedata$`Current Modeling`)
+hd <- paste0("HD tACS: ", treedata$`HD tACS` )
+neuroguided <- paste0("neuroguided: ", treedata$Neuroguidance)
+current_density <- paste0("current density: ", treedata$`Current Density (mA/cm2)`, " mA/cm2")
+
+
+# customized font sizes
+treedata$font_size <- NA
+for (i in seq_along(name)){
+  if(nchar(name[i]) <=8){
+    treedata$font_size[i] <- 9 
+  }else{
+    treedata$font_size[i] <- 9 
+  }
+}
+  
+font <- c(rep(14, 11), treedata$font_size) # the first 11 are the domains 
+
+# text to display in each box
+text = list()
+for (i in seq_along(name)){
+  if(is.na(treedata$Author2[i]) == TRUE){
+    text[i] <- paste(name[i],"\n", year[i],"\n", exp_id[i],"\n") #, n[i],"\n") 
+  }else{
+    text[i] <- paste(name[i],"\n", name2[i],"\n", year[i]," ", exp_id[i],"\n") 
+  }
+}
+  
+text <- c(domains, text) # the fist 11 are the names of the domains
+
+# hover text for individual experiment boxes (using hover data)
+hovertext = list()
+for (i in seq_along(name)){
+  hovertext[i] <- paste(experiment[i],"\n", n[i],"\n", population[i],"\n", age[i],"\n",
+                           montage[i],"\n", freq[i],"\n", intensity[i],"\n", duration[i], "\n",
+                           timing[i],"\n", t_effects[i],"\n", phase[i],"\n", curr_mod[i],"\n", 
+                           hd[i], "\n", neuroguided[i])
+}
+
+# hover text for domain boxes
+hovertext_domain = list()
+for (i in seq_along(domains)){
+  hovertext_domain[i] <- paste(domains_df[i,1],"\n", paste0("N = ", domains_df[i,2]),"\n", paste0("k = ", domains_df[i,3],"\n"))
+}
+
+# hover text for entire figure
+hovertext <- c(hovertext_domain, hovertext) 
+```
+
+
+```{r figure plotting and saving, echo = FALSE}
+fig <- plot_ly(type="treemap", 
+               labels = labels, 
+               parents = parents, 
+               values = values, 
+               textinfo = 'text',
+               text = text,
+               hovertext = hovertext,
+               hoverinfo='text',
+               insidetextfont = list(size = font),
+               marker=list(colors = c(rep(0, length(domains)),treedata$`Hedge's G`), 
+                           colorscale='RdBu', colorbar = list(title = "g", thickness = 15),
+                           showscale=TRUE),
+               width = 7.2*144,
+               height = 5.9*144)  
+
+fig
+
+# save as html
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/Results/FigureOutputs/Treemap_HypothesizedDisruptionEffects.html"))
+```
+
+```{r saving, include = FALSE}
+# save as svg
+#orca(fig, "treemap_scaledN_disruption.svg", width = 7.2*144, height = 5.9*144)
+
+save_image(fig, paste0(directory,"/Results/FigureOutputs/Treemap_HypothesizedDisruptionEffects.svg"), width = 7.2*144, height = 5.9*144)
+
+```
+
+

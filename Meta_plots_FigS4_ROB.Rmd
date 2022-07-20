@@ -1,0 +1,71 @@
+---
+title: "Quality Assessment"
+output:
+  word_document: default
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r warning=TRUE, include=FALSE}
+library("readxl")
+library("plotly")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300)
+```
+
+```{r data download, include = FALSE}
+
+directory = "/Users/shreygrover/Desktop/MetaAnalysis_SciTranslMed/Sci_Transl_Med_Submission_2/Analysis/Scripts_Revised/Meta_Datafiles_2021"
+rob_data <- read_excel(paste0(directory, "/Data_for_analysis/robdata.xlsx"))
+```
+
+```{r data for figure, echo = FALSE}
+domain <- c("D1", "D2", "D3", "D4", "D5", "DS", "Overall Risk")
+
+# create a dataframe
+robdat<- data.frame("Low_Risk" = rep(0,7), "Not_Applicable" = rep(0,7), "Some_Concerns" = rep(0,7))
+
+# risk in domains D1-D5 as proportions
+risks <- data.frame(rbind(prop.table(table(rob_data$D1)), prop.table(table(rob_data$D2)), prop.table(table(rob_data$D3)), prop.table(table(rob_data$D4)), prop.table(table(rob_data$D5))))
+
+# populate data frame
+robdat[1:5,c(1,3)] <- risks
+robdat[6,1:3] <- prop.table(table(rob_data$DS)) # risk in domain S
+robdat[7,c(1,3)] <- prop.table(table(rob_data$`Overall Risk`)) # overall risk
+robdat[3:4,3] <- 0 # change "some concerns" proportions to 0 for rows 3 and 4 (prop.table() function doesn't return a proportion of 0, so in case pf 100% "low risk" in the domain the output of the function will be only the proportion of 1 for "low risk" and it will be copied into both columns of the robdat. Change the other column to 0 manually if that's the case)
+
+rownames(robdat) <- domain # assign domain names as row names
+robdat <- round(robdat*100,1) # convert into percentages
+
+# text for figure (spaces added to align text in the bars)      
+text = c("            Risk of bias: Randomization", "              Risk of bias: Intervention", "                Risk of bias: Missing data", "                Risk of bias: Measurement", "               Risk of bias: Reporting", "Risk of bias: Period & Carryover" ,"          Risk of bias: Overall")
+
+```
+
+```{r figure plotting and saving}
+
+fig <- plot_ly(robdat, x = ~domain, y = ~Low_Risk, type = 'bar', name = 'Low Risk', text = text, textposition = "inside", marker = list(color = 'rgba(102,189,99,0.9)'), opacity = 0.6, width = 600, height = 400)
+
+fig <- fig %>% add_trace(y = ~Some_Concerns, name = 'Some Concerns', text = "", marker = list(color = 'rgba(254,196,79, 0.9)'))
+
+fig <- fig %>% add_trace(y = ~Not_Applicable, name = 'Not Applicable', text = "", marker = list(color = 'rgba(189,189,189, 0.9)'))
+
+fig <- fig %>% layout(yaxis = list(title = '% studies'), xaxis = list(title = ''), barmode = 'stack', title = '', uniformtext=list(minsize=14, mode='show'))
+
+fig
+
+# save as html 
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/Results/RoB/robplotnew.html"))
+# save as svg
+# orca(fig, "robplot.svg")
+
+save_image(fig, paste0(directory, "/Results/RoB/robplotnew.svg"))
+```
+
+

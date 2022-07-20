@@ -1,0 +1,577 @@
+---
+title: "Outcome-Based Results"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r packages, warning=TRUE, include=FALSE}
+library("tidyverse")
+library("metafor")
+library("robumeta")
+library("readxl")
+library("writexl")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300)
+```
+
+```{r data download and subsetting, include=FALSE}
+
+directory = "/Users/shreygrover/Desktop/MetaAnalysis_SciTranslMed/Sci_Transl_Med_Submission_2/Analysis/Scripts_Revised/Meta_Datafiles_2021"
+mlm.data <- read_excel(paste0(directory, "/Data_for_analysis/Analysis_Outcome_Revised.xlsx"))
+
+# convert frequency into numeric variable
+mlm.data$freq_num <- as.numeric(mlm.data$freq_num)
+
+# Performance, RT and clinical datasets
+mlm.clin <- mlm.data[mlm.data$population == 'Clinical',]
+
+# uncomment to test w/o clinical studies
+mlm.data <- mlm.data[mlm.data$population != "Clinical",]
+
+mlm.perf <- mlm.data[mlm.data$dv == 'Performance',]
+mlm.rt <- mlm.data[mlm.data$dv == 'RT',]
+
+```
+
+## Overall Effect of tACS
+
+Pool effects using robu() function from robumeta package to compute overall effects for All, Performance, and RT measures
+
+*All* 
+
+```{r overall effect All, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = mlm.data, studynum = ID, var.eff.size = v, rho = 0.8, small = FALSE)
+print(model_intercept)
+
+# results for rho = {0, 0.2, 0.4, 0.6, 0.8, 1}
+sensitivity(model_intercept)
+```
+
+*Outliers All*
+
+For identification of outliers use rstudent() function from metafor package (robumeta doesn't have appropriate solution). 
+
+```{r overall effect All (outliers removed), echo=FALSE}
+
+# fit random-effects model using the weights from the robust variance estimation model above 
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.data)
+
+# compute studentized residuals
+rstud <- rstudent(model_rma)
+
+# identify outliers
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+
+# if outliers are present, refit the RVE model after excluding them
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = mlm.data[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = FALSE)
+}
+print(outliers)
+print(model_out)
+```
+
+*Performance*
+
+```{r overall effect Performance, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = mlm.perf, studynum = ID, var.eff.size = v, rho = 0.8, small = FALSE)
+print(model_intercept)
+
+sensitivity(model_intercept)
+```
+
+*Outliers Performance*
+
+```{r overall effect Performance (outliers removed), echo=FALSE}
+
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.perf)
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = mlm.perf[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = FALSE)
+}
+print(outliers)
+print(model_out)
+```
+
+*Reaction Time*
+
+```{r overall effect RT, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = mlm.rt, studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+
+sensitivity(model_intercept)
+```
+*Outliers RT*
+
+```{r overall effect RT (outliers removed), echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.rt)
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = mlm.rt[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+}
+print(outliers)
+print(model_out)
+```
+
+## Overall Effects of tACS by Domains 
+
+```{r forest plot function, echo=FALSE}
+
+forest_rve <- function(model_intercept, domain, scale_size = 0.3) {
+  # Takes in an RVE model fitted by robu() function, the name of the cognitive domain and a scaling factor for
+  # displaying markers and generates a forest plot for a specific cognitive domain
+
+  rows <- c(length(model_intercept$data.full$effect.size):1,-0.5)
+
+  forest.default(x = c(model_intercept$data.full$effect.size, model_intercept$reg_table$b.r),
+                 ci.lb = c(model_intercept$data.full$effect.size - model_intercept$data.full$sd.eff.size*1.96,
+                           model_intercept$reg_table$CI.L),
+                 ci.ub = c(model_intercept$data.full$effect.size + model_intercept$data.full$sd.eff.size*1.96,
+                           model_intercept$reg_table$CI.U),
+                 showweights = 0,
+                 header=FALSE,
+                 rows=rows,
+                 ylim = c(-1, rows[1]+3),
+                 xlim = c(-5.5, 5),
+                 ilab = cbind(
+                   c(round(model_intercept$data.full$r.weights,2), ' '),
+                   c(model_intercept$data$for_forest, " "),
+                   c(round(model_intercept$data$freq_num,2), " ")
+                   ),
+                 ilab.xpos=c(3, -3, -1.55), 
+                 cex = 0.8,
+                 col = c(rep("gray15", length(model_intercept$data.full$r.weights)), "firebrick3"),
+                 pch = c(rep(15, length(model_intercept$data.full$r.weights)), 18),
+                 psize = c(model_intercept$data.full$r.weights*scale_size, 3),
+                 slab = c(model_intercept$data$experiment, "Total Effect"),
+                 fonts = "serif",
+                 main = domain)
+
+  abline(h=0.5)
+  par(cex=.8, font=2)
+  text(c(-5.15, -3, -1.55, 3, 4.25), rows[1]+2, c("Study", "Outcome",  "Frequency", "Weight", "Estimate [95% CI]"))
+}
+
+```
+
+*Domains | All* 
+
+```{r domains All, echo=FALSE}
+# Fit RVE intercept model
+
+domains = c("Working Memory", "Long-Term Memory", "Attention", "Executive Control", "Intelligence", "Motor Learning", "Motor Memory", "Learning", "Decision-Making")
+
+effects_robu = data.frame(matrix(ncol = 9, nrow = 8))
+model = list()
+
+for(d in 1:length(domains)) {
+  # fit RVE model for each domain 
+  model[[d]] <- robu(formula = y ~ 1, 
+                        data = mlm.data[mlm.data$domain==domains[d],],
+                        studynum = ID, 
+                        var.eff.size = v, 
+                        rho = .8, 
+                        small = TRUE)
+  # extract data ffrom the model
+  effects_robu[d] <- c(model[[d]]$reg_table$b.r,   # effect size
+                       model[[d]]$reg_table$prob,  # p-value
+                       model[[d]]$reg_table$CI.L,  # CI lower bound
+                       model[[d]]$reg_table$CI.U,  # CI upper bound
+                       model[[d]]$mod_info$I.2[1], # I squared
+                       model[[d]]$reg_table$dfs,   # degrees of freedom
+                       model[[d]]$N,               # number of studies (N)
+                       model[[d]]$M)               # number of effects (k)
+}
+
+colnames(effects_robu) <- domains
+rownames(effects_robu) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+
+# transpose
+effects_robu <- as.data.frame(t(as.matrix(effects_robu)))
+print(effects_robu)
+
+# save as csv 
+write_csv(effects_robu, paste0(directory, "/Results/WithoutClinical/Effects/Domains_All.csv"))
+
+```
+
+*Function for domain-specific outlier removal*
+```{r outlier removal function, include = FALSE}
+
+remove_rst <- function(df, model_domain, domain) {
+  # Takes in a data set (All, Performance or RT), an RVE model fitted by robu() function and the name of the
+  # cognitive domain and returns an RVE model with domain-specific outliers removed
+  
+  df <- df[df$domain==domain,]
+  model_rma <- rma.uni(y, v, weights = model_domain$data.full$r.weights, data=df)
+  rstud <- rstudent(model_rma)
+  outliers <- model_domain$data$experiment[abs(rstud$z) >= 1.96]
+  if(sum(abs(rstud$z) >= 1.96) !=0) {
+    model_out <- robu(formula = y ~ 1, data = df[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+    return(list(model_out, outliers))
+  }else{
+    # if no outliers identified, returns the same domain-specific RVE model
+    return(list(model_domain, outliers))
+  }
+}
+```
+
+*Domains (outliers removed) | All* 
+
+```{r domains All (outlieers removed), echo=FALSE}
+effects_robu_out = data.frame(matrix(ncol = 9, nrow = 8))
+model_out = list()
+
+for(d in 1:length(domains)) {
+  model_out[[d]] <- remove_rst(df = mlm.data, model = model[[d]], domains[d])
+
+  effects_robu_out[d] <- c(model_out[[d]][[1]]$reg_table$b.r,
+                       model_out[[d]][[1]]$reg_table$prob,
+                       model_out[[d]][[1]]$reg_table$CI.L,
+                       model_out[[d]][[1]]$reg_table$CI.U,
+                       model_out[[d]][[1]]$mod_info$I.2[1],
+                       model_out[[d]][[1]]$reg_table$dfs,
+                       model_out[[d]][[1]]$N,
+                       model_out[[d]][[1]]$M)
+}
+
+colnames(effects_robu_out) <- domains
+rownames(effects_robu_out) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+
+# transpose
+effects_robu_out <- as.data.frame(t(as.matrix(effects_robu_out)))
+print(effects_robu_out)
+
+write_csv(effects_robu_out, paste0(directory, "/Results/WithoutClinical/Effects/Domains_All_out.csv"))
+```
+
+*Domains | Performance* 
+
+```{r domains Performance, echo=FALSE}
+
+effects_robu = data.frame(matrix(ncol = 9, nrow = 8))
+model = list()
+
+for(d in 1:length(domains)) {
+  model[[d]] <- robu(formula = y ~ 1, 
+                        data = mlm.perf[mlm.perf$domain==domains[d],],
+                        studynum = ID, 
+                        var.eff.size = v, 
+                        rho = .8, 
+                        small = TRUE)
+  effects_robu[d] <- c(model[[d]]$reg_table$b.r,
+                       model[[d]]$reg_table$prob,
+                       model[[d]]$reg_table$CI.L,
+                       model[[d]]$reg_table$CI.U,
+                       model[[d]]$mod_info$I.2[1],
+                       model[[d]]$reg_table$dfs,
+                       model[[d]]$N,
+                       model[[d]]$M)
+}
+
+colnames(effects_robu) <- domains
+rownames(effects_robu) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+
+# transpose
+effects_robu <- as.data.frame(t(as.matrix(effects_robu)))
+print(effects_robu)
+
+write_csv(effects_robu, paste0(directory, "/Results/WithoutClinical/Effects/Domains_Perf.csv"))
+
+```
+
+*Domains (outliers removed) | Performance* 
+
+```{r domains Performance (outliers removed), echo=FALSE}
+#domains = c("Working Memory", "Long-Term Memory", "Attention", "Executive Control", "Intelligence", "Motor Learning", "Motor Memory")
+effects_robu_out = data.frame(matrix(ncol = 9, nrow = 8))
+model_out = list()
+
+for(d in 1:length(domains)) {
+  model_out[[d]] <- remove_rst(df = mlm.perf, model = model[[d]], domains[d])
+
+  effects_robu_out[d] <- c(model_out[[d]][[1]]$reg_table$b.r,
+                       model_out[[d]][[1]]$reg_table$prob,
+                       model_out[[d]][[1]]$reg_table$CI.L,
+                       model_out[[d]][[1]]$reg_table$CI.U,
+                       model_out[[d]][[1]]$mod_info$I.2[1],
+                       model_out[[d]][[1]]$reg_table$dfs,
+                       model_out[[d]][[1]]$N,
+                       model_out[[d]][[1]]$M)
+}
+
+colnames(effects_robu_out) <- domains
+rownames(effects_robu_out) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+
+# transpose
+effects_robu_out <- as.data.frame(t(as.matrix(effects_robu_out)))
+print(effects_robu_out)
+
+write_csv(effects_robu_out, paste0(directory, "/Results/WithoutClinical/Effects/Domains_Perf_out.csv"))
+```
+
+```{r WM forest, fig.dim=c(10,15), include=FALSE}
+# working memory before outlier removal
+forest_rve(model[[1]], paste0(domains[1]))
+```
+
+```{r WM forest (outliers removed), fig.dim=c(10,15), include=FALSE}
+# working memory after outlier removal
+forest_rve(model_out[[1]][[1]], paste0(domains[1]), 0.2)
+```
+
+*Domains | RT* 
+
+```{r domains RT, echo=FALSE}
+# remove Long-Term Memory (only 1 study measuring RT), Learning (0 studies) and Decision-Making (0 studies)  
+domains = c("Working Memory", "Attention", "Executive Control", "Intelligence", "Motor Learning", "Motor Memory")
+  
+effects_robu = data.frame(matrix(ncol = 6, nrow = 8))
+model = list()
+
+for(d in 1:length(domains)) {
+  model[[d]] <- robu(formula = y ~ 1, 
+                        data = mlm.rt[mlm.rt$domain==domains[d],],
+                        studynum = ID, 
+                        var.eff.size = v, 
+                        rho = .8, 
+                        small = TRUE)
+  effects_robu[d] <- c(model[[d]]$reg_table$b.r,
+                       model[[d]]$reg_table$prob,
+                       model[[d]]$reg_table$CI.L,
+                       model[[d]]$reg_table$CI.U,
+                       model[[d]]$mod_info$I.2[1],
+                       model[[d]]$reg_table$dfs,
+                       model[[d]]$N,
+                       model[[d]]$M)
+}
+
+colnames(effects_robu) <- domains
+row.names(effects_robu) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+
+# transpose
+effects_robu <- as.data.frame(t(as.matrix(effects_robu)))
+print(effects_robu)
+
+write_csv(effects_robu, paste0(directory, "/Results/WithoutClinical/Effects/Domains_RT.csv"))
+
+```
+*Domains (outliers removed) | RT* 
+
+```{r domains RT (outliers removed), echo=FALSE}
+# domains_out <- domains[c(3,5:6)]
+effects_robu_out = data.frame(matrix(ncol = 6, nrow = 8))
+model_out = list()
+
+for(d in 1:length(domains)) {
+  model_out[[d]] <- remove_rst(df = mlm.rt, model = model[[d]], domains[d])
+
+  effects_robu_out[d] <- c(model_out[[d]][[1]]$reg_table$b.r,
+                       model_out[[d]][[1]]$reg_table$prob,
+                       model_out[[d]][[1]]$reg_table$CI.L,
+                       model_out[[d]][[1]]$reg_table$CI.U,
+                       model_out[[d]][[1]]$mod_info$I.2[1],
+                       model_out[[d]][[1]]$reg_table$dfs,
+                       model_out[[d]][[1]]$N,
+                       model_out[[d]][[1]]$M)
+}
+
+colnames(effects_robu_out) <- domains
+rownames(effects_robu_out) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+
+# transpose
+effects_robu_out <- as.data.frame(t(as.matrix(effects_robu_out)))
+print(effects_robu_out)
+
+write_csv(effects_robu_out, paste0(directory, "/Results/WithoutClinical/Effects/Domains_RT_out.csv"))
+```
+
+## Subgroup: Older Adults 
+
+*Older Adults | All*
+```{r older adults All, echo=FALSE}
+model_elderly <- robu(formula = y ~ 1, data= subset(mlm.data, population=="elderly", ), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+print(model_elderly)
+sensitivity(model_elderly)
+```
+
+*Older Adults | All (outliers removed)*
+```{r older adults All (outliers removed), echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_elderly$data.full$r.weights, data=subset(mlm.data, population=="elderly"))
+rstud <- rstudent(model_rma)
+outliers_elderly <- model_elderly$data$experiment[abs(rstud$z) >= 1.96]
+
+model_elderly_out <- robu(formula = y ~ 1, data= subset(mlm.data, population=="elderly" & !experiment %in% outliers_elderly), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers_elderly)
+print(model_elderly_out)
+```
+
+*Older Adults | Performance*
+```{r older adults Performance, echo=FALSE}
+model_elderly <- robu(formula = y ~ 1, data= subset(mlm.perf, population=="elderly"), studynum = ID,  var.eff.size = v, rho = .8, small = TRUE)
+print(model_elderly)
+sensitivity(model_elderly)
+```
+
+*Older Adults | Performance (outliers removed)*
+```{r older adults Performance (outliers removed), echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_elderly$data.full$r.weights, data=subset(mlm.perf, population=="elderly"))
+rstud <- rstudent(model_rma)
+outliers_elderly <- model_elderly$data$experiment[abs(rstud$z) >= 1.96]
+
+model_elderly_out <- robu(formula = y ~ 1, data= subset(mlm.perf, population=="elderly" & !experiment %in% outliers_elderly), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers_elderly)
+print(model_elderly_out)
+```
+
+*Older Adults | RT*
+```{r older adults RT, echo=FALSE}
+model_elderly <- robu(formula = y ~ 1, data= subset(mlm.rt, population=="elderly"), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+print(model_elderly)
+sensitivity(model_elderly)
+```
+
+*Older Adults | RT (outliers removed)*
+```{r older adults RT (outliers removed), echo=FALSE}
+
+model_rma <- rma.uni(y, v, weights = model_elderly$data.full$r.weights, data=subset(mlm.rt, population=="elderly"))
+rstud <- rstudent(model_rma)
+outliers_elderly <- model_elderly$data$experiment[abs(rstud$z) >= 1.96]
+
+model_elderly_out <- robu(formula = y ~ 1, data= subset(mlm.rt, population=="elderly" & !experiment %in% outliers_elderly), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers_elderly)
+print(model_elderly_out)
+```
+## Subgroup: Clinical Studies
+
+*Clinical Studies | Symptoms*
+Including Dallmer-Zerbe et al. (2020) study that targeted Attention in individuals with ADHD 
+
+```{r clinical symptoms, echo=FALSE}
+model_clin <- robu(formula = y ~ 1, data = subset(mlm.clin, 
+                   dv == "clinical score" | study == "Dallmer-Zerbe, 2020"), studynum = ID,
+                   var.eff.size = v, rho = .8, small = TRUE)
+print(model_clin)
+```
+
+*Clinical Studies | Functional Outcomes* 
+```{r clinical functional outcomes, echo=FALSE}
+model_clin_cog<- robu(formula = y ~ 1, data = subset(mlm.clin, dv != "clinical score"), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+print(model_clin_cog)
+```
+
+*Clinical Studies | Functional Outcomes | (outliers removed)*
+
+```{r functional outcomes (outliers removed), echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_clin_cog$data.full$r.weights, data = subset(mlm.clin, dv != "clinical score"))
+rstud <- rstudent(model_rma)
+outliers_clin <- model_clin_cog$data$experiment[abs(rstud$z) >= 1.96]
+
+model_clin_cog_out <- robu(formula = y ~ 1, data= subset(mlm.clin, dv != "clinical score" & !experiment %in% outliers_clin), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers_clin)
+print(model_clin_cog_out)
+```
+
+*Clinical Studies | Performance* 
+```{r clinical performance, echo=FALSE}
+model_clin_cog<- robu(formula = y ~ 1, data = subset(mlm.clin, dv == "Performance"), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+print(model_clin_cog)
+```
+
+*Clinical Studies | Performance | (outliers removed)*
+
+```{r clinical performance (outliers removed), echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_clin_cog$data.full$r.weights, data = subset(mlm.clin, dv == "Performance"))
+rstud <- rstudent(model_rma)
+outliers_clin <- model_clin_cog$data$experiment[abs(rstud$z) >= 1.96]
+
+model_clin_cog_out <- robu(formula = y ~ 1, data= subset(mlm.clin, dv == "Performance" & !experiment %in% outliers_clin), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers_clin)
+print(model_clin_cog_out)
+```
+
+*Clinical Studies |RT* 
+```{r clinicial rt, echo=FALSE}
+model_clin_cog<- robu(formula = y ~ 1, data = subset(mlm.clin, dv == "RT"), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+print(model_clin_cog)
+```
+
+
+
+## Publication Bias
+
+```{r tfunnel plot and trim-and-fill, echo = FALSE}
+# fit RVE model to All effects
+model_intercept <- robu(formula = y ~ 1, data = mlm.data, studynum = ID, var.eff.size = v, rho = .8, small = FALSE)
+
+# fit random-effects model using rma.uni() (metafor)
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.data)
+
+# funnel plot (metafor)
+funnel(model_rma, main = 'Publication Bias',  cex=0.7, cex.main = 0.7, cex.axis = 0.7, cex.lab = 0.7)
+
+# Egger's regression test (decided not to use anymore, uncomment if needed)
+# regtest.rma(model_rma, model = 'rma', predictor = 'sei')
+
+# apply trim-and-fill procedure using trimfill() (metafor) and print summary
+summary(trimfill(model_rma, estimator = 'R0', comb.random = TRUE))
+```
+
+Trim-and-Fill procedure did not detect any missing studies on the left side  
+
+*Removal of outliers and second application of Trim-and_Fill method*
+```{r trim-and-fill and funnel after outlier removal, echo=FALSE}
+
+# identify and remove outliers
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+mlm.data.out <- mlm.data[! mlm.data$experiment %in% outliers,]
+
+# fit RVE model and random effects model (metafor) to data after outliers are removed
+model_intercept <- robu(formula = y ~ 1, data = mlm.data.out, studynum = ID, var.eff.size = v, rho = .8, small = FALSE)
+model_rma.out <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.data.out)
+
+# Egger's regression test on data with outliers removed (decided not to use anymore, uncomment if needed)
+# regtest.rma(model_rma.out, model = 'rma', predictor = 'sei')
+
+# apply trim-and-fill procedure using trimfill() (metafor) and print summary
+trimmed <- trimfill(model_rma.out, estimator = 'R0', comb.random = TRUE)
+summary(trimmed)
+
+# funnel plot of the data after outlier removal and trim-and-fill procedure
+funnel.rma(trimmed, main = 'Publication Bias after Outlier Exclusion & Trim & Fill', cex=0.7, cex.main = 0.7, cex.axis = 0.7, cex.lab = 0.7)
+
+# Egger's regression on data with outliers removed after trim-and-fill (decided not to use anymore, uncomment if needed)
+# regtest.rma(trimmed, model = 'rma', predictor = 'sei')
+
+```
+
+Display and save both funnel plots
+```{r save funnel plots, dpi = 300, fig.dim=c(8,4), include = FALSE}
+pdf("Publication Bias plots.pdf", width = 7.2, height = 4)
+
+par(mfrow=c(1,2))
+funnel(model_rma, cex=0.5, cex.main = 0.7, cex.axis = 0.7, cex.lab = 0.7, xlim = c(-1, 1.5))
+funnel.rma(trimmed, cex=0.5, cex.main = 0.7, cex.axis = 0.7, cex.lab = 0.7,xlim = c(-1, 1.5))
+
+dev.off()
+```
+
+
+

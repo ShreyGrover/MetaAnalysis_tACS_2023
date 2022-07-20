@@ -1,0 +1,233 @@
+---
+title: "Meta Regression Long-Term Memory"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r warning=TRUE, include=FALSE}
+library("tidyverse")
+library("metafor")
+library("robumeta")
+library("readxl")
+library("writexl")
+```
+
+```{r data download, include=FALSE}
+
+directory = "/Users/shreygrover/Desktop/MetaAnalysis_SciTranslMed/Sci_Transl_Med_Submission_2/Analysis/Scripts_Revised/Meta_Datafiles_2021"
+mlm.data <- read_excel(paste0(directory, "/Data_for_analysis/Analysis_Outcome_Revised.xlsx"))
+
+mlm.data <- subset(mlm.data, domain == 'Long-Term Memory')
+
+# test w/o clinical studies
+#mlm.data <- mlm.data[mlm.data$population != "Clinical",]
+
+```
+
+```{r new variables and subsetting, include=FALSE}
+
+# set to 1 to exclude outliers from the analysis, 0 otherwise
+out_exclude = 1
+
+# assigning montage category
+mlm.data["montage_cat"] <- 'anterior'
+mlm.data[mlm.data$montage == 'Parietal' | mlm.data$montage == 'Occipital' | mlm.data$montage == 'Temporal',"montage_cat"] <- 'posterior'
+mlm.data[mlm.data$montage == 'Fronto-Parietal' | mlm.data$montage == 'Fronto-Occipital' | mlm.data$montage == 'Fronto-Temporal',"montage_cat"]<- 'anterior-posterior'
+
+# intensity as a dichotomous variable
+mlm.data$intensity_cat <- factor(ifelse(mlm.data$intensity>1, "high", "low"))
+
+# creating lateralization variable
+mlm.data$lateral <- factor(ifelse(mlm.data$lateralization == 'Bilateral', "bilateral", "unilateral"))
+
+# age as a dichotomous variable
+mlm.data$age <- factor(ifelse(mlm.data$mean_age>50, "elderly", "young"))
+
+# creating design variable
+mlm.data$design <- factor(ifelse(mlm.data$n == mlm.data$n1, "within", "between"))
+
+# converting frequency to a numeric variable
+mlm.data$freq_num <- as.numeric(mlm.data$freq_num)
+
+# so-tDCS categorical variable
+mlm.data$soTDCS <- factor(ifelse(mlm.data$intensity>0.6, "tACS", "soTDCS"))
+
+# converting current density to a numeric variable
+mlm.data$current_density <- as.numeric(mlm.data$current_density)
+
+# performance and reaction time subsets of data 
+mlm.perf <- mlm.data[mlm.data$dv == 'Performance',]
+mlm.rt <- mlm.data[mlm.data$dv == 'RT',]
+
+```
+
+*Exclude outliers*
+
+```{r outlier removal, echo = FALSE}
+# All
+model_rve<- robu(formula = y ~ 1, data = mlm.data, studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+model_rma <- rma.uni(y, v, weights = model_rve$data.full$r.weights, data=mlm.data)
+rstud <- rstudent(model_rma)
+outliers <- model_rve$data$experiment[abs(rstud$z) >= 1.96]
+
+if (out_exclude == 1){
+  mlm.data <- mlm.data[! mlm.data$experiment %in% outliers,]
+}
+
+# performance
+model_rve<- robu(formula = y ~ 1, data = mlm.perf, studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+model_rma <- rma.uni(y, v, weights = model_rve$data.full$r.weights, data=mlm.perf)
+rstud <- rstudent(model_rma)
+outliers <- model_rve$data$experiment[abs(rstud$z) >= 1.96]
+
+if (out_exclude == 1){
+  mlm.perf <- mlm.perf[! mlm.perf$experiment %in% outliers,]
+}
+```
+
+```{r counts per predictor, include = FALSE}
+preds <- colnames(mlm.data)
+preds <- preds[-(1:36)]
+for(i in 1:length(preds)){
+  print(preds[i])
+  print(table(mlm.data[,preds[i]]))
+  print("------------------------------")
+}
+```
+
+*OK: freq_num, duration, intensity num, intensity cat, lateral, phase (0/1), rs/task, blinding, age, sotDCS* 
+
+## All 
+
+*Frequency*
+**Continuous**
+```{r, echo = FALSE}
+
+reg_all_output <- robu(formula = y ~ 1 + freq_num, data=mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table
+```
+
+*Intensity*
+**Continuous**
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.numeric(intensity), data= subset(mlm.data, intensity!="-"), studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+**Categorical: Low (<= 1 mA), High (>1 mA)**
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + intensity_cat, data= subset(mlm.data, intensity_cat!="-"), studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Duration* 
+**Categorical: 0 - <20 min, 1 - > 20 min**
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.factor(duration), data= mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Montage*
+**Montage: Unilateral, Bilateral**
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.factor(lateral), data= mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Resting State vs During the Task*
+**Categorical: rest (0), task(1)**
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.factor(rs_task), data=mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Blinding*
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.factor(blinding), data=mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Age*
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.factor(age), data=mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*so-TDCS*
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.factor(soTDCS), data=mlm.data, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Current Density*
+**Continuous**
+```{r, echo = FALSE}
+reg_all_output <- rbind(reg_all_output, robu(formula = y ~ 1 + as.numeric(current_density), data= subset(mlm.data, current_density!="-"), studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+
+## Performance 
+
+*Frequency*
+**Continuous**
+```{r, echo = FALSE}
+reg_perf_output <- robu(formula = y ~ 1 + freq_num, data=mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table
+```
+
+*Intensity*
+**Continuous**
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.numeric(intensity), data= subset(mlm.perf, intensity!="-"), studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+**Categorical: Low (<= 1 mA), High (>1 mA)**
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + intensity_cat, data= subset(mlm.perf, intensity_cat!="-"), studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Duration* 
+**Categorical: 0 - <20 min, 1 - > 20 min**
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.factor(duration), data= mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Montage*
+**Montage: Unilateral, Bilateral**
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.factor(lateral), data= mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Resting State vs During the Task*
+**Categorical: rest (0), task(1)**
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.factor(rs_task), data=mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Blinding*
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.factor(blinding), data=mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Age*
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.factor(age), data=mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*so-TDCS*
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.factor(soTDCS), data=mlm.perf, studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+*Current Density*
+**Continuous**
+```{r, echo = FALSE}
+reg_perf_output <- rbind(reg_perf_output, robu(formula = y ~ 1 + as.numeric(current_density), data= subset(mlm.perf, current_density!="-"), studynum = ID, v, rho = .8, small = TRUE)$reg_table)
+```
+
+
+Save files
+```{r save output, include = FALSE}
+if(out_exclude == 0) {
+  write_csv(reg_all_output, paste0(directory, "/Results/Regression_LTM/regression_all_longtermmem.csv"))
+  write_csv(reg_perf_output, paste0(directory, "/Results/Regression_LTM/regression_perf_longtermmem.csv"))
+
+}else {
+  write_csv(reg_all_output, paste0(directory, "/Results/Regression_LTM/regression_all_longtermmem_outremoved.csv"))
+  write_csv(reg_perf_output, paste0(directory, "/Results/Regression_LTM/regression_perf_longtermmem_outremoved.csv"))
+}
+
+```

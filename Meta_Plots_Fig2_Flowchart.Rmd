@@ -1,0 +1,95 @@
+---
+title: "Flow Chart of Study Search and Selection"
+output:
+  word_document: default
+  pdf_document: default
+  html_notebook: default
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r warning=TRUE, include=FALSE}
+library("readxl")
+library("plotly")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300)
+```
+
+```{r}
+directory = "/Users/renatafayz/Documents/tACS_MetaAnalysis"
+```
+
+
+*Text to display on the paths of the flowchart*
+```{r text for figure, include = FALSE}
+text = c("Search Results: \nPubMed 772 \nPsycInfo 573 \n629 Duplicates removed \n716 Titles and/or abstracts screened", "629 Duplicates removed", "21 Additional records identified in bibliographies of selected studies", "143 Records assessed for eligibility \nExclusion criteria:\n No sham control\n Sample size < 5\n Combination with another treatment\n Control experiments"," 594 Records excluded after first screening", "117 Eligible records","27 Records excluded: \n	Ineligible outcome measure (15) \n No sham control (6) \n Combination with another treatment (3) \n Conference abstract only (3)", "102 Records included in quantitative analysis", "14 Records excluded from quantitative analysis due to incomplete data")
+```
+
+```{r figure plotting and saving}
+
+# for plot parameters see https://plotly.com/r/reference/sankey/
+
+fig <- plot_ly(
+    type = "sankey",
+    orientation = "h",
+    width=5.9*144,
+    height=4.1*144,
+    domain = list(
+      x =  c(0,1),
+      y =  c(0,1)
+    ),
+    node = list(
+      label = c("Records Identified in Databases", 
+                "Additional Records (Bibliographies)",
+                "Records screened", 
+                "Duplicates Removed",
+                "Full-Text Assessment", 
+                "Records Excluded", 
+                "Eligible Records", 
+                "Excluded after Full-Text Assessment", 
+                "Included in Meta-Analysis",
+                "Exluded from Quantitative Analysis"),
+      # coordinates for figure nodes
+      x = c(0.1, 0.1, 0.3, 0.25, 0.5, 0.45, 0.6, 0.65, 0.8, 0.85),
+      y = c(0.3, 0.65, 0.5, 0.15, 0.35, 0.7, 0.25, 0.6, 0.15, 0.45),
+      color = c("rgba(33,113,181, 0.9)", "rgba(33,113,181, 0.9)", "rgba(65,174,118, 0.9)", "rgba(203,24,29, 0.6)", "rgba(65,174,118, 0.9)", "rgba(203,24,29, 0.6)", "rgba(65,174,118, 0.9)", "rgba(203,24,29, 0.6)", "rgba(65,174,118, 0.9)", "rgba(203,24,29, 0.6)"),
+      pad = 80,
+      thickness = 15,
+      hovertemplate = "%{label}<extra>%{value}</extra>",
+      line = list(
+        color = "black",
+        width = 0.3
+      )
+    ),
+
+    link = list(
+      source = c(0, 0, 1, 2, 2, 4, 4, 6, 6),
+      target = c(2, 3, 2, 4, 5, 6, 7, 8, 9),
+      value = c(716, 629, 21, 143, 594, 116, 27, 102, 14), # these values reflect the flow from one node another. They are taken from the Search_results_data.xlsx and put manually.  
+      customdata = text,
+      hoverlabel = list(bgcolor = "rgb(37,37,37)"),
+      hovertemplate = "%{customdata}",
+      color = 'rgba(166,189,219, 0.6)'
+    )
+  )
+fig <- fig %>% layout(font = list(size = 12),
+                      xaxis = list(showgrid = F, zeroline = F),
+                      yaxis = list(showgrid = F, zeroline = F))
+
+fig
+
+# save as html
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/flowchart_new.html"))
+
+# save as svg
+orca(fig, "flowchart.svg",
+        width = 5.9*144,
+        height = 4.1*144)
+
+```
+
+

@@ -1,0 +1,238 @@
+---
+title: "Subgroup Analysis of Studies Manipulating Phase"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r warning=TRUE, include=FALSE}
+library("tidyverse")
+library("metafor")
+library("robumeta")
+library("readxl")
+library("writexl")
+```
+
+```{r data download and subsetting, include=FALSE}
+directory = "/Users/shreygrover/Desktop/MetaAnalysis_SciTranslMed/Sci_Transl_Med_Submission_2/Analysis/Scripts_Revised/Meta_Datafiles_2021"
+
+mlm.data <- read_excel(paste0(directory, "/Data_for_analysis/Analysis_Hypothesis_Revised.xlsx"))
+
+# select only studies with intentional phase manipulation
+mlm.data <- mlm.data[mlm.data$phase_intent == 1,]
+
+# uncomment to test w/o clinical studies
+# mlm.data <- mlm.data[mlm.data$population != "Clinical",]
+
+# Performance and RT datasets
+mlm.perf <- mlm.data[mlm.data$dv == 'Performance',]
+mlm.rt <- mlm.data[mlm.data$dv == 'RT',]
+
+# counts of in-phase and anti-phase experiments
+print(table(mlm.data$phase)) # 45/17 # 42/17 w/o clinical
+print(table(mlm.perf$phase)) # 33/13 
+print(table(mlm.rt$phase))   # 9/4  
+```
+
+### Overall Effect of tACS in experiments with phase manipulation (both in- and anti-phase)
+
+*All*
+```{r all, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = mlm.data, studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+sensitivity(model_intercept)
+```
+*Outliers All*
+For identification of outliers use rstudent() function from metafor package (robumeta doesn't have appropriate solution). 
+
+```{r all outliers, echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.data)
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = mlm.data[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+}
+print(outliers)
+print(model_out)
+```
+
+*Performance*
+
+```{r performance, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = mlm.perf, studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+
+sensitivity(model_intercept)
+```
+
+*Outliers Performance*
+
+```{r performance outliers, echo=FALSE}
+
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.perf)
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+
+model_out <- robu(formula = y ~ 1, data = mlm.perf[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers)
+print(model_out)
+```
+
+*Reaction Time*
+
+```{r rt, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = mlm.rt, studynum = ID, var.eff.size = v, rho =0.8, small = TRUE)
+print(model_intercept)
+
+sensitivity(model_intercept)
+```
+
+*Outliers RT*
+
+```{r rt outliers, echo=FALSE}
+
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=mlm.rt)
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = mlm.rt[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+}
+print(outliers)
+print(model_out)
+```
+
+### Specific effects of in-phase and anti-phase tACS
+
+*All*
+
+**1. Effect of in-phase tACS on improvement of functional outcome** <br />
+
+Here, we compute the effect of tACS in a subset of experiments that performed intentional in-phase manipulation in order to improve cognitive or clinical outcome. <br />
+
+```{r all in-phase, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = subset(mlm.data, phase == 1 & hypothesis == 1), studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+```
+
+Results after removing outliers
+
+```{r all in-phase outliers, echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=subset(mlm.data, phase == 1 & hypothesis == 1))
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = subset(mlm.data, phase == 1 & hypothesis == 1)[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE) 
+}
+
+print(outliers)
+print(model_out)
+```
+
+**2. Effect of anti-phase tACS on impairment of functional outcome** <br />
+
+Here, we compute the effect of tACS in a subset of experiments that performed intentional anti-phase manipulation in order to disrupt cognitive function (no clinical studies applied tACS for impairment for ethical reasons). <br />
+
+```{r all anti-phase, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = subset(mlm.data, phase == 2 & hypothesis == 2), studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+```
+
+Results after removing outliers
+
+```{r all anti-phase outliers, echo=FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=subset(mlm.data, phase == 2 & hypothesis == 2))
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = subset(mlm.data, phase == 2 & hypothesis == 2)[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE) 
+}
+
+print(outliers)
+print(model_out)
+
+```
+
+*Performance*
+
+**1. Effect of in-phase tACS on improvement of cognitive performance** <br />
+
+Here, we compute the effect of tACS in a subset of experiments that performed intentional in-phase manipulation in order to improve performance. <br />
+
+```{r perf in-phase, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = subset(mlm.perf, phase == 1 & hypothesis == 1), studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+```
+
+Results after removing outliers
+
+```{r perf in-phase outliers, echo = FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data= subset(mlm.perf, phase == 1 & hypothesis == 1))
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = subset(mlm.perf, phase == 1 & hypothesis == 1)[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE) 
+}
+
+print(outliers)
+print(model_out)
+```
+
+**2. Effect of anti-phase tACS on impairment of cognitive performance** <br />
+
+Here, we compute the effect of tACS in a subset of experiments that performed intentional anti-phase manipulation in order to disrupt performance. <br />
+
+```{r perf anti-phase, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = subset(mlm.perf, phase == 2 & hypothesis == 2), studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+```
+
+Results after removing outliers
+
+```{r perf anti-phase outliers, echo = FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=subset(mlm.perf, phase == 2 & hypothesis == 2))
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = subset(mlm.perf, phase == 2 & hypothesis == 2)[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE) 
+}
+
+print(outliers)
+print(model_out)
+```
+
+*Reaction Time*
+
+**1. Effect of in-phase tACS on improvement of cognitive speed** <br />
+
+Here, we compute the effect of tACS in a subset of experiments that performed intentional in-phase manipulation in order to decrease RT <br />
+
+```{r rt in-phase, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = subset(mlm.rt, phase == 1 & hypothesis == 1), studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+```
+
+```{r rt in-phase outliers, echo = FALSE}
+model_rma <- rma.uni(y, v, weights = model_intercept$data.full$r.weights, data=subset(mlm.rt, phase == 1 & hypothesis == 1))
+rstud <- rstudent(model_rma)
+outliers <- model_intercept$data$experiment[abs(rstud$z) >= 1.96]
+if(sum(abs(rstud$z) >= 1.96) !=0) {
+  model_out <- robu(formula = y ~ 1, data = subset(mlm.rt, phase == 1 & hypothesis == 1)[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE) 
+}
+
+print(outliers)
+print(model_out)
+```
+
+```{r rt anti-phase, echo=FALSE}
+model_intercept <- robu(formula = y ~ 1, data = subset(mlm.rt, phase == 2 & hypothesis == 2), studynum = ID, var.eff.size = v, rho = 0.8, small = TRUE)
+print(model_intercept)
+```
+
+*Note: analysis of the separate effect of anti-phase tACS on cognitive speed was not performed as there weren't sufficient experiments (N = 4, k = 4, df = 2.94).* <br />
+
+

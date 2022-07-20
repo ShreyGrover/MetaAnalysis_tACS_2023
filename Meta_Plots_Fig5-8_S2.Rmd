@@ -1,0 +1,675 @@
+---
+title: "&nbsp;"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+editor_options:
+  chunk_output_type: inline
+---
+
+```{r warning=TRUE, include=FALSE}
+library("metafor")
+library("robumeta")
+library("readxl")
+library("writexl")
+library("plotly")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi=300)
+```
+
+```{r data download, include=FALSE}
+
+directory = "/Users/shreygrover/Desktop/MetaAnalysis_SciTranslMed/Sci_Transl_Med_Submission_2/Analysis/Scripts_Revised/Meta_Datafiles_2021"
+mlm.data <- read_excel(paste0(directory, "/Data_for_analysis/Analysis_Outcome_Revised.xlsx"))
+
+mlm.perf <- mlm.data[mlm.data$dv == 'Performance',]
+mlm.rt <- mlm.data[mlm.data$dv == 'RT',]
+mlm.clin <- mlm.data[mlm.data$population == 'Clinical',]
+```
+
+*Effects of tACS on All measures by Domains *
+```{r effects by domains, include=FALSE}
+
+domains = c("Working Memory", "Long-Term Memory", "Attention", "Executive Control", "Intelligence", "Motor Learning", "Motor Memory")
+
+effects_robu = data.frame(matrix(ncol = 7, nrow = 8))
+model = list()
+
+for(d in 1:length(domains)) {
+  model[[d]] <- robu(formula = y ~ 1, 
+                        data = mlm.data[mlm.data$domain==domains[d],],
+                        studynum = ID, 
+                        var.eff.size = v, 
+                        rho = .8, 
+                        small = TRUE)
+  effects_robu[d] <- c(model[[d]]$reg_table$b.r,
+                       model[[d]]$reg_table$SE,
+                       model[[d]]$reg_table$prob,
+                       model[[d]]$reg_table$CI.L,
+                       model[[d]]$reg_table$CI.U,
+                       model[[d]]$mod_info$I.2[1],
+                       model[[d]]$reg_table$dfs,
+                       length(model[[d]]$data.full$effect.size)
+                       )
+}
+
+colnames(effects_robu) <- domains
+rownames(effects_robu) <- c('es', 'se', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'n')
+
+```
+
+*Outlier removal function*
+```{r outlier removal function, include = FALSE}
+
+remove_rst <- function(df, model_domain, domain) {
+  # Takes in a data set (All, Performance or RT), an RVE model fitted by robu() function and the name of the
+  # cognitive domain and returns an RVE model with domain-specific outliers removed
+  
+  df <- df[df$domain==domain,]
+  model_rma <- rma.uni(y, v, weights = model_domain$data.full$r.weights, data=df)
+  rstud <- rstudent(model_rma)
+  outliers <- model_domain$data$experiment[abs(rstud$z) >= 1.96]
+  if(sum(abs(rstud$z) >= 1.96) !=0) {
+    model_out <- robu(formula = y ~ 1, data = df[abs(rstud$z)<1.96,], studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+    return(list(model_out, outliers))
+  }else{
+    # if no outliers identified, returns the same domain-specific RVE model
+    return(list(model_domain, outliers))
+  }
+}
+```
+
+*remove outliers within each domain*
+```{r domains All (outlieers removed), echo=FALSE}
+effects_robu_out = data.frame(matrix(ncol = 7, nrow = 8))
+model_out = list()
+
+for(d in 1:length(domains)) {
+  model_out[[d]] <- remove_rst(df = mlm.data, model = model[[d]], domains[d])
+
+  effects_robu_out[d] <- c(model_out[[d]][[1]]$reg_table$b.r,
+                       model_out[[d]][[1]]$reg_table$prob,
+                       model_out[[d]][[1]]$reg_table$CI.L,
+                       model_out[[d]][[1]]$reg_table$CI.U,
+                       model_out[[d]][[1]]$mod_info$I.2[1],
+                       model_out[[d]][[1]]$reg_table$dfs,
+                       model_out[[d]][[1]]$N,
+                       model_out[[d]][[1]]$M)
+}
+
+colnames(effects_robu_out) <- domains
+rownames(effects_robu_out) <- c('es', 'pval', 'ci_lb', 'ci_up', 'I^2', 'df', 'N', 'k')
+```
+
+*function to extract data for forest plots*
+```{r get_data function, include=FALSE}
+# function that gets data from the models
+# takes in an RVE model and a scaling factor for plotting. Scaling is applied to the weights of the effects. Each weight determines the size of the effect size marker, scaling can be necessary for better visualization.  
+
+get_data <- function(model, model_out, scale_size = 2) {
+  names <- c(model$data$experiment, "Total Effect", "Effect w/o Outliers") # names of experiments
+  effects <- c(model$data.full$effect.size, model$reg_table$b.r, model_out$reg_table$b.r) # effect sizes for each experiment and the total effect
+  sds <- c(model$data.full$sd.eff.size*1.96, model$reg_table$SE*1.96, model_out$reg_table$SE*1.96) # confidence intervals
+  weights <- c(model$data.full$r.weights*scale_size, 9, 9) # weights of effects scaled by a scaling factor 
+  
+  df <- data.frame(names, effects, sds, weights) # put into a data frame
+  return(df)
+}
+```
+
+*function to make the forest plot*
+```{r forest function, include=FALSE}
+#Forest plotting function
+# takes in data extracted by the get_data() function, domain name, color for plotting, and a boolean for plotting total effect size for the respective domain (default is TRUE)
+
+forest_plotly <- function(data, domain, domain_color = 'rgba(84,39,143, 0.9)', total_effect = TRUE, outs){
+  
+  data = data
+  yorder <- data$names
+  yform <- list(categoryorder = "array", categoryarray = yorder)
+  
+  # symbols for plotting
+  if (total_effect){
+    es_symbols <- c(rep('square', length(data$names)-2), 'diamond','diamond')
+    es_colors <- c(rep(domain_color, length(data$names)-2), '#000000', '#990918')
+  } else {
+    es_symbols <- c(rep('square', length(data$names)))
+    es_colors <- c(rep(domain_color, length(data$names)))
+  }
+  
+  es_colors[outs] = '#990918'
+  
+  fig <- plot_ly(type='scatter', mode='markers')
+  
+  for (i in seq_along(data$names)){
+    fig <- fig %>% add_markers(
+      data = data,
+      opacity=0.7,
+      x=data$effects[i],
+      y=data$names[i], 
+      error_x=list(array=data$sds[i], color=es_colors[i]),
+      marker=list(color=es_colors[i], size = data$weights[i], line = list(color = es_colors[i], width = 1), symbol = es_symbols[i]),
+      showlegend=F
+    )
+  }
+  
+  fig <- fig %>% layout(yaxis = list(title = ''), xaxis = list(title = '', range = c(-1.5, 2.5))) 
+  fig <- fig %>% layout(yaxis = yform)
+  fig <- fig %>% layout(yaxis = list(autorange = 'reversed'))
+  fig <- fig %>% layout(font = list(size = 7))
+  fig
+}
+```
+
+*make the forest plots for each domain*
+```{r forests_new, warning=FALSE, echo = FALSE, fig.dim=c(8, 12)}
+
+#Forest Plots After Outlier Removal
+s1 <- forest_plotly(get_data(model[[1]], model_out[[1]][[1]], 1.5), 'Working Memory', domain_color = 'rgba(84,39,143, 0.9)', total_effect = TRUE, outs <- c(15,37,52,58))
+s2 <- forest_plotly(get_data(model[[5]], model_out[[5]][[1]], 0.8), 'Intelligence', domain_color = 'rgba(223,101,176, 0.9)', total_effect = TRUE, outs <- c(2))
+
+fig1 <- subplot(s1, s2, nrows = 2, heights = c(0.8, 0.2), margin = c(0.06, 0.06, 0.02, 0.03)) 
+
+fig1 <- fig1 %>% layout(annotations = list(
+  list(x = 0.33 , y = 1.0, text = "Working Memory", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)),
+  list(x = 0.33 , y = 0.18, text = "Intelligence", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)))
+)
+
+s3 <- forest_plotly(get_data(model[[2]], model_out[[2]][[1]], 1.4), 'Long-Term Memory', domain_color = 'rgba(29,145,192, 0.9)', total_effect = TRUE, outs <- c(12,44,49,52))
+s4 <- forest_plotly(get_data(model[[4]], model_out[[4]][[1]], 2.5), 'Executive Control', domain_color = 'rgba(252,141,89, 0.9)',total_effect = TRUE, outs <- c(14))
+
+
+fig2 <- subplot(s3, s4, nrows = 2, heights = c(0.7, 0.3), margin = c(0.06, 0.06, 0.02, 0.03))
+
+fig2 <- fig2 %>% layout(annotations = list(
+  list(x = 0.33 , y = 1.0, text = "Long-Term Memory", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)),
+  list(x = 0.33 , y = 0.28, text = "Executive Control", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)))
+)
+
+s5 <- forest_plotly(get_data(model[[3]], model_out[[3]][[1]]), 'Attention', domain_color = 'rgba(65,171,93, 0.9)', total_effect = TRUE, outs <- c(2))
+s6 <- forest_plotly(get_data(model[[6]], model_out[[6]][[1]], 3), 'Motor Learning', domain_color = 'rgba(11,11,69, 0.9)', total_effect = TRUE, outs <-c(1,20,21)) # 227, 26, 28
+s7 <- forest_plotly(get_data(model[[7]], model_out[[7]][[1]], 3), 'Motor Memory', domain_color = 'rgba(254,217,118, 0.9)', total_effect = TRUE, outs <- c(2,18))
+
+fig3 <- subplot(s5, s6, s7, nrows = 3, heights = c(0.26, 0.3, 0.44), margin = c(0.06, 0.06, 0.03, 0.03))
+
+fig3 <- fig3 %>% layout(annotations = list(
+  list(x = 0.33 , y = 1.0, text = "Attention", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)),
+  list(x = 0.33 , y = 0.72, text = "Motor Learning", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)),
+  list(x = 0.33 , y = 0.42, text = "Motor Memory", showarrow = F, xref='paper', yref='paper', xanchor = "center", 
+      yanchor = "bottom", font = list(size = 12)))
+)
+
+fig <- subplot(fig1, fig2, fig3, nrows = 1, widths = c(0.33,0.33, 0.33), margin = c(0.07, 0.07, 0.02, 0.02))
+fig <- fig %>% layout(showlegend = FALSE, width = 9.5*96, height = 8.5*96) # sizing for the web version
+
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/Results/FigureOutputs/ForestPlots.html"))
+
+# different sizing for the print version
+fig <- fig %>% layout(showlegend = FALSE, width = 7.2*144, height = 9.7*144)
+fig
+orca(fig, "/Results/FigureOutputs/ForestPlots.svg",
+        width = 7.2*144,
+        height = 9.7*144)
+
+```
+
+*Boxplots for each domain before outlier removal*
+```{r boxplots domains, warning=FALSE, echo = FALSE}
+dom_colors = c('rgba(84,39,143, 0.9)', 'rgba(29,145,192, 0.9)', 'rgba(65,171,93, 0.9)', 'rgba(252,141,89, 0.9)', 'rgba(223,101,176, 0.9)', 'rgba(11,11,69, 0.9)', 'rgba(254,217,118, 0.9)')
+
+
+fig1 <- plot_ly(y = model_out[[1]][[1]]$data$y, type = "box", boxpoints = "all", name = "WM", jitter = 0.3, pointpos = -1.8, marker = list(color =  'rgba(84,39,143, 0.9)'), line = list(color = 'rgba(84,39,143, 0.9)'), width = 800, height = 400)
+
+fig1 <- fig1 %>% add_trace(y = model[[2]]$data$y, name="LTM", marker = list(color = 'rgba(29,145,192, 0.9)'), line = list(color = 'rgba(29,145,192, 0.9)')) 
+fig1 <- fig1 %>% add_trace(y = model[[3]]$data$y, name="Att", marker = list(color = 'rgba(65,171,93, 0.9)'),  line = list(color = 'rgba(65,171,93, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model[[4]]$data$y, name="EC", marker = list(color = 'rgba(252,141,89, 0.9)'),  line = list(color = 'rgba(252,141,89, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model[[5]]$data$y, name="Int", marker = list(color = 'rgba(223,101,176, 0.9)'),  line = list(color = 'rgba(223,101,176, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model[[6]]$data$y, name="ML", marker = list(color = 'rgba(11,11,69, 0.9)'),line = list(color = 'rgba(11,11,69, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model[[7]]$data$y, name="MM", marker = list(color = 'rgba(254,217,118, 0.9)'),  line = list(color = 'rgba(254,217,118, 0.9)'))
+
+fig1 <- fig1 %>% layout(yaxis = list(title = "Hedges' G"),
+                        colorway = dom_colors, showlegend = FALSE, 
+                        annotations = list(
+                        list(x = 0.5 , y = 1.0, text = "Distribution of Effect Sizes by Cognitive Domains Before Outlier Removal",
+                        showarrow = F, xref='paper', yref='paper', xanchor = "center", yanchor = "bottom", 
+                        font = list(size = 14))))
+```
+
+*Point estimates for each domains before outlier removal*
+```{r point estimates domains, warning=FALSE, echo = FALSE}
+
+# put domain effects in a data frame
+d_effects <- as.data.frame(t(as.matrix(effects_robu)))
+d_effects <- round(d_effects, 3)
+d_effects$domain <- c("WM", "LTM", "Att", "EC", "Int", "ML", "MM")
+rownames(d_effects) <- NULL
+
+xorder <- d_effects$domain
+xform <- list(categoryorder = "array", categoryarray = xorder)
+
+fig2 <- plot_ly(type='scatter', mode='markers', width = 800, height = 400)
+
+for (i in seq_along(d_effects$es)){
+    fig2 <- fig2 %>% add_markers(
+    data = d_effects,
+    opacity=0.7,
+    x=d_effects$domain[i],
+    y=d_effects$es[i], 
+    error_y=list(type = "constant", value = d_effects$ci_up[i] - d_effects$es[i],  color=dom_colors[i]),
+    marker=list(color=dom_colors[i], line = list(color = dom_colors[i], width = 1), size = 15),
+    showlegend=F
+  )
+}
+
+fig2 <- fig2 %>% layout(yaxis = list(title = "Hedges' G"), xaxis = list(title = ''), title = "")
+fig2 <- fig2 %>% layout(xaxis = xform)
+fig2 <- fig2 %>% layout(annotations = list(
+                        list(x = 0.5 , y = 1.0, text = "Overall Effect Size Estimates by Cognitive Domains Before Outlier Removal",
+                        showarrow = F, xref='paper', yref='paper', xanchor = "center", yanchor = "bottom", 
+                        font = list(size = 14))))
+```
+
+*Combine the boxplot and point estimates to make the domains summary plot*
+
+```{r domains summary, warning=FALSE, warning=FALSE, echo = FALSE}
+fig <- subplot(fig1, fig2, nrows = 2, margin = c(0.05, 0.05, 0.02, 0.03), shareX = TRUE, shareY = TRUE)
+fig <- fig %>% layout(showlegend = FALSE, yaxis = list(title = "Hedges' G"), width = 7.2*144, height= 6.5*144)
+
+fig
+
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/Results/FigureOutputs/DomainsSummaryBeforeOutLierRemoval.html"))
+
+orca(fig, "/Results/FigureOutputs/DomainsSummaryBeforeOutLierRemoval.svg",
+       width = 7.2*144,
+       height = 5.9*144)
+```
+
+
+*Boxplots for each domain after outlier removal*
+```{r boxplots domains after outlier removal, warning=FALSE, echo = FALSE}
+dom_colors = c('rgba(84,39,143, 0.9)', 'rgba(29,145,192, 0.9)', 'rgba(65,171,93, 0.9)', 'rgba(252,141,89, 0.9)', 'rgba(223,101,176, 0.9)', 'rgba(11,11,69, 0.9)', 'rgba(254,217,118, 0.9)')
+
+
+fig1 <- plot_ly(y = model_out[[1]][[1]]$data$y, type = "box", boxpoints = "all", name = "WM", jitter = 0.3, pointpos = -1.8, marker = list(color =  'rgba(84,39,143, 0.9)'), line = list(color = 'rgba(84,39,143, 0.9)'), width = 800, height = 400)
+
+fig1 <- fig1 %>% add_trace(y = model_out[[2]][[1]]$data$y, name="LTM", marker = list(color = 'rgba(29,145,192, 0.9)'), line = list(color = 'rgba(29,145,192, 0.9)')) 
+fig1 <- fig1 %>% add_trace(y = model_out[[3]][[1]]$data$y, name="Att", marker = list(color = 'rgba(65,171,93, 0.9)'),  line = list(color = 'rgba(65,171,93, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model_out[[4]][[1]]$data$y, name="EC", marker = list(color = 'rgba(252,141,89, 0.9)'),  line = list(color = 'rgba(252,141,89, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model_out[[5]][[1]]$data$y, name="Int", marker = list(color = 'rgba(223,101,176, 0.9)'),  line = list(color = 'rgba(223,101,176, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model_out[[6]][[1]]$data$y, name="ML", marker = list(color = 'rgba(11,11,69, 0.9)'),line = list(color = 'rgba(11,11,69, 0.9)'))
+fig1 <- fig1 %>% add_trace(y = model_out[[7]][[1]]$data$y, name="MM", marker = list(color = 'rgba(254,217,118, 0.9)'),  line = list(color = 'rgba(254,217,118, 0.9)'))
+
+fig1 <- fig1 %>% layout(yaxis = list(title = "Hedges' G"),
+                        colorway = dom_colors, showlegend = FALSE, 
+                        annotations = list(
+                        list(x = 0.5 , y = 1.0, text = "Distribution of Effect Sizes by Cognitive Domains After Outlier Removal",
+                        showarrow = F, xref='paper', yref='paper', xanchor = "center", yanchor = "bottom", 
+                        font = list(size = 14))))
+```
+
+*Point estimates for each domains after outlier removal*
+```{r point estimates domains after outlier removal, warning=FALSE, echo = FALSE}
+
+# put domain effects in a data frame
+d_effects <- as.data.frame(t(as.matrix(effects_robu_out)))
+d_effects <- round(d_effects, 3)
+d_effects$domain <- c("WM", "LTM", "Att", "EC", "Int", "ML", "MM")
+rownames(d_effects) <- NULL
+
+xorder <- d_effects$domain
+xform <- list(categoryorder = "array", categoryarray = xorder)
+
+fig2 <- plot_ly(type='scatter', mode='markers', width = 800, height = 400)
+
+for (i in seq_along(d_effects$es)){
+    fig2 <- fig2 %>% add_markers(
+    data = d_effects,
+    opacity=0.7,
+    x=d_effects$domain[i],
+    y=d_effects$es[i], 
+    error_y=list(type = "constant", value = d_effects$ci_up[i] - d_effects$es[i],  color=dom_colors[i]),
+    marker=list(color=dom_colors[i], line = list(color = dom_colors[i], width = 1), size = 15),
+    showlegend=F
+  )
+}
+
+fig2 <- fig2 %>% layout(yaxis = list(title = "Hedges' G"), xaxis = list(title = ''), title = "")
+fig2 <- fig2 %>% layout(xaxis = xform)
+fig2 <- fig2 %>% layout(annotations = list(
+                        list(x = 0.5 , y = 1.0, text = "Overall Effect Size Estimates by Cognitive Domains After Outlier Removal",
+                        showarrow = F, xref='paper', yref='paper', xanchor = "center", yanchor = "bottom", 
+                        font = list(size = 14))))
+```
+
+*Combine the boxplot and point estimates to make the domains summary plot after outlier removal*
+
+```{r domains summary aftr outlier removal, warning=FALSE, warning=FALSE, echo = FALSE}
+fig <- subplot(fig1, fig2, nrows = 2, margin = c(0.05, 0.05, 0.02, 0.03), shareX = TRUE, shareY = TRUE)
+fig <- fig %>% layout(showlegend = FALSE, yaxis = list(title = "Hedges' G"), width = 7.2*144, height= 6.5*144)
+
+fig
+
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/Results/FigureOutputs/DomainsSummaryAfterOutLierRemoval.html"))
+
+orca(fig, "/Results/FigureOutputs/DomainsSummaryAfterOutLierRemoval.svg",
+       width = 7.2*144,
+       height = 5.9*144)
+```
+
+
+*Results Summary Boxplots*
+```{r boxplots results, warning=FALSE}
+fig_colors = c('rgba(136,65,157, 0.9)', 'rgba(128,125,186, 0.9)', 'rgba(128,125,186, 0.9)','rgba(67,147,195, 0.9)','rgba(252,146,114, 0.9)','rgba(146,197,222, 0.9)','rgba(33,102,172, 0.9)','rgba(244,165,130, 0.9)','rgba(214,96,77, 0.9)','rgba(1,108,89, 0.9)','rgba(2,129,138, 0.9)') 
+
+# all effects, perf, RT
+sp1 <- plot_ly(y = mlm.data$y, type = "box", boxpoints = "all", name = "All", jitter = 0.3, pointpos = -1.8, marker = list(color =  fig_colors[1]), line = list(color = fig_colors[1]))
+sp1 <- sp1 %>% add_trace(y = mlm.perf$y, name="Perf", marker = list(color =  fig_colors[12]), line = list(color = fig_colors[2]))
+sp1 <- sp1 %>% add_trace(y = mlm.rt$y, name="RT", marker = list(color =  fig_colors[3]), line = list(color = fig_colors[3]))
+sp1 <- sp1 %>% layout(yaxis = list(range = c(-1.5, 2)))
+
+# offline vs online perf
+sp2 <- plot_ly(y = mlm.perf[mlm.perf$online == 0,]$y, type = "box", boxpoints = "all", name="Offline", jitter = 0.3, pointpos = -1.8, marker = list(color =  fig_colors[4]), line = list(color = fig_colors[4]))
+sp2 <- sp2 %>% add_trace(y = mlm.perf[mlm.perf$online == 1,]$y, name="Online", marker = list(color =  fig_colors[5]), line = list(color = fig_colors[5]))
+sp2 <- sp2 %>% layout(yaxis = list(range = c(-1.5, 2)))
+
+# offline * current modeling interaction
+sp3 <- plot_ly(y = mlm.perf[mlm.perf$online == 0 & mlm.perf$current_modeling == 0,]$y, type = "box", boxpoints = "all", name="Off w/o CM", jitter = 0.3, pointpos = -1.8, marker = list(color =  fig_colors[6]), line = list(color = fig_colors[6]))
+sp3 <- sp3 %>% add_trace(y = mlm.perf[mlm.perf$online == 0 & mlm.perf$current_modeling == 1,]$y, name="Off + CM", marker = list(color =  fig_colors[7]), line = list(color = fig_colors[7]))
+sp3 <- sp3 %>% add_trace(y = mlm.perf[mlm.perf$online == 1 & mlm.perf$current_modeling == 0,]$y, name="On w/o CM", marker = list(color =  fig_colors[8]), line = list(color = fig_colors[8]))
+sp3 <- sp3 %>% add_trace(y = mlm.perf[mlm.perf$online == 1 & mlm.perf$current_modeling == 1,]$y, name="On + CM", marker = list(color =  fig_colors[9]), line = list(color = fig_colors[9]))
+
+# phase 
+mlm.data_ph <- read_excel(paste0(directory, "/Data_for_analysis/Analysis_Hypothesis_Revised.xlsx"))
+# select only studies with intentional phase manipulation
+mlm.data_ph <- mlm.data_ph[mlm.data_ph$phase_intent == 1,]
+# changes signs for anti-phase effects 
+mlm.data_ph[mlm.data_ph$phase == 2,]$y <- mlm.data_ph[mlm.data_ph$phase == 2,]$y*(-1)
+
+sp4 <- plot_ly(y = mlm.data_ph[mlm.data_ph$hypothesis == 1 & mlm.data_ph$phase == 1,]$y, type = "box", boxpoints = "all", name="In-Phase Improvement", jitter = 0.3, pointpos = -1.8, marker = list(color =  fig_colors[10]), line = list(color = fig_colors[10]))
+
+sp4 <- sp4 %>% add_trace(y = mlm.data_ph[mlm.data_ph$hypothesis == 2 & mlm.data_ph$phase == 2,]$y, name="Anti-Phase Impairment", marker = list(color =  fig_colors[11]), line = list(color = fig_colors[11]))
+
+sp4 <- sp4 %>% layout(colorway = fig_colors)
+
+fig3 <- subplot(sp1, sp2, sp3, sp4, nrows = 1, widths = c(0.25,0.175, 0.4, 0.175), margin = c(0.03, 0.03, 0.02, 0.02), shareY=T)
+
+fig3 <- fig3 %>% layout(yaxis = list(title = "Hedges' G", range = c(-1.5, 2)),
+                      xaxis = list(showticklabels=FALSE),
+                      xaxis2 = list(showticklabels=FALSE),
+                      xaxis3 = list(showticklabels=FALSE),
+                      xaxis4 = list(showticklabels=FALSE),
+                      colorway = fig_colors, showlegend = FALSE, 
+                      annotations = list(
+                      list(x = 0.5 , y = 1.0, text = "Distribution of Effect Sizes",
+                      showarrow = F, xref='paper', yref='paper', xanchor = "center", yanchor = "bottom", 
+                      font = list(size = 14))))
+
+
+fig3 <- fig3 %>% layout(width = 7.2*144,
+                      height = 5.9/2*144) 
+fig3
+```
+
+```{r point estimates data, warning=FALSE}
+# point estimates and CIs of effect sizes for plotting
+summary_effects <- data.frame("es" = c(0.289, 0.3, 0.186, 0.385, 0.180, 0.321, 0.591, 0.301, 0.035, 0.317, -0.314),"ci_lb"= c(0.212, 0.213, 0.063, 0.265, 0.064, 0.195, 0.295, 0.134, -0.113, 0.103, -0.546), "ci_up" = c(0.365, 0.386, 0.308, 0.506, 0.297, 0.446, 0.887,0.469, 0.182, 0.531, -0.082), "name" = c("Overall", "Perf", "RT", "Offline", "Online", "Off w/o CM", "Off + CM", "On w/o CM", "On + CM ", "In-phase", "Anti-phase"))
+
+```
+
+*Results Summary Point Estimates*
+```{r point estimates plot, warning=FALSE}
+xorder <- summary_effects$name
+xform <- list(categoryorder = "array", categoryarray = xorder[1:3])
+
+sp21 <- plot_ly(type='scatter', mode='markers')
+for (i in 1:3){
+    sp21 <- sp21 %>% add_markers(
+    data = summary_effects,
+    opacity=0.7,
+    x=summary_effects$name[i],
+    y=summary_effects$es[i], 
+    error_y=list(type = "constant", value = summary_effects$ci_up[i] - summary_effects$es[i],  color=fig_colors[i]),
+    marker=list(color=fig_colors[i], line = list(color = fig_colors[i], width = 1), size = 15),
+    showlegend=F
+  )
+}
+sp21 <- sp21 %>% layout(xaxis = xform)
+
+
+xform <- list(categoryorder = "array", categoryarray = xorder[4:5])
+sp22 <- plot_ly(type='scatter', mode='markers')
+
+for (i in 4:5){
+    sp22 <- sp22 %>% add_markers(
+    data = summary_effects,
+    opacity=0.7,
+    x=summary_effects$name[i],
+    y=summary_effects$es[i], 
+    error_y=list(type = "constant", value = summary_effects$ci_up[i] - summary_effects$es[i],  color=fig_colors[i]),
+    marker=list(color=fig_colors[i], line = list(color = fig_colors[i], width = 1), size = 15),
+    showlegend=F
+  )
+}
+sp22 <- sp22 %>% layout(xaxis = xform)
+
+
+xform <- list(categoryorder = "array", categoryarray = xorder[6:9])
+sp23 <- plot_ly(type='scatter', mode='markers')
+
+for (i in 6:9){
+    sp23 <- sp23 %>% add_markers(
+    data = summary_effects,
+    opacity=0.7,
+    x=summary_effects$name[i],
+    y=summary_effects$es[i], 
+    error_y=list(type = "constant", value = summary_effects$ci_up[i] - summary_effects$es[i],  color=fig_colors[i]),
+    marker=list(color=fig_colors[i], line = list(color = fig_colors[i], width = 1), size = 15),
+    showlegend=F
+  )
+}
+sp23 <- sp23 %>% layout(xaxis = xform)
+
+
+xform <- list(categoryorder = "array", categoryarray = xorder[10:11])
+sp24 <- plot_ly(type='scatter', mode='markers')
+
+for (i in 10:11){
+    sp24 <- sp24 %>% add_markers(
+    data = summary_effects,
+    opacity=0.7,
+    x=summary_effects$name[i],
+    y=summary_effects$es[i], 
+    error_y=list(type = "constant", value = summary_effects$ci_up[i] - summary_effects$es[i],  color=fig_colors[i]),
+    marker=list(color=fig_colors[i], line = list(color = fig_colors[i], width = 1), size = 15),
+    showlegend=F
+  )
+}
+sp24 <- sp24 %>% layout(xaxis = xform)
+
+fig4 <- subplot(sp21, sp22, sp23, sp24, nrows = 1, widths = c(0.25,0.175, 0.4, 0.175), margin = c(0.03, 0.03, 0.02, 0.02), shareY = TRUE)
+
+
+fig4 <- fig4 %>% layout(yaxis = list(title = "Hedges' G"),
+                        colorway = fig_colors, showlegend = FALSE, 
+                        annotations = list(
+                        list(x = 0.5 , y = 1.0, text = "Effects Size estimates",
+                        showarrow = F, xref='paper', yref='paper', xanchor = "center", yanchor = "bottom", 
+                        font = list(size = 14))))
+
+
+fig4 <- fig4 %>% layout(width = 7.2*144,
+                      height = 5.9/2*144)
+
+```
+
+
+```{r results summary plot, warning=FALSE}
+fig <- subplot(fig3, fig4, nrows = 2, margin = c(0.03, 0.03, 0.02, 0.03), shareY = TRUE) 
+fig <- fig %>% layout(showlegend = FALSE, yaxis = list(title = "Hedges' G"))
+fig <- fig %>% layout(width = 7.2*144,
+                      height = 5.9*144)
+fig
+
+htmlwidgets::saveWidget(as_widget(fig), paste0(directory, "/Results/FigureOutputs/SummaryPlot.html"))
+ 
+save_image(fig, paste0(directory, "/Results/FigureOutputs/SummaryPlot.svg"),width = 7.2*144, height = 5.9*144)
+```
+
+
+*FIGURE 8*
+
+*Subplot1: Older adults, All measures, All experiments, Outliers marked, Forest Plot*
+```{r older adults forest, echo=FALSE, fig.dim=c(8, 12), warning=FALSE}
+
+# RVE model for older adults
+model_elderly <- robu(formula = y ~ 1, data= subset(mlm.data, population=="elderly", ), studynum = ID, 
+                        var.eff.size = v, rho = .8, small = TRUE)
+
+# RVE model for older adults after removing outliers
+model_rma <- rma.uni(y, v, weights = model_elderly$data.full$r.weights, data=subset(mlm.data, population=="elderly"))
+rstud <- rstudent(model_rma)
+outliers_elderly <- model_elderly$data$experiment[abs(rstud$z) >= 1.96]
+model_elderly_out <- robu(formula = y ~ 1, data= subset(mlm.data, population=="elderly" & !experiment %in% outliers_elderly), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+print(outliers_elderly)
+# Outliers identified: "Paßmann (2016) 1a" "Rumpf (2019) 1a". Indices: 17, 24.
+
+# subplot 1
+fig5 <- forest_plotly(get_data(model_elderly, model_elderly_out, 2.5), '', domain_color = 'rgba(2,56,88, 0.9)', total_effect = TRUE,  outs <- c(17, 24)) # outs location manually entered after checking locations of the outliers in the output of the get_data function
+
+fig5 <- fig5 %>% layout(annotations = list(x = 0.43 , y = 1.0, text = "Older Adults", showarrow = F, xref='paper',
+                                         yref='paper', xanchor = "center", 
+                                         yanchor = "bottom", font = list(size = 12)),
+                                         xaxis = list(title = '', range = c(-1.5, 2)),
+                                         width = 300,
+                                         height = 600) 
+```
+
+*Subplot 2a: Older adults, All measures, Boxplot before outlier removal, Boxplot after outlier removal*
+```{r older adults boxplot, warning = FALSE, echo =FALSEFALSE}
+
+fig6 <- plot_ly(y = mlm.data[mlm.data$population == "elderly",]$y, type = "box", boxpoints = "all", name = "Before OR", jitter = 0, pointpos = -1.8, marker = list(color =  'rgba(2,56,88, 0.9)'), line = list(color = 'rgba(2,56,88, 0.9)'), width = 300, height = 300)
+
+fig6 <- fig6 %>% layout(yaxis = list(title = "Hedges' G", range=c(-0.6, 1.7)),
+                        colorway = 'rgba(2,56,88, 0.9)', showlegend = FALSE)
+
+fig6 <- fig6 %>% add_trace(y = model_elderly_out$data$y, name = "After OR", marker = list(color =  'rgba(2,56,88, 0.9)'), line = list(color = 'rgba(2,56,88, 0.9)'))
+```
+
+*Subplot 2b: Older adults, All measures, Point estimates before and after outlier removal*
+```{r older adults point estimate, warning = FALSE, echo = FALSE}
+
+older_effect <- data.frame("es" = c(round(model_elderly$reg_table$b.r,3), round(model_elderly_out$reg_table$b.r,3)), "ci_up" = c(round(model_elderly$reg_table$CI.U, 3), round(model_elderly_out$reg_table$CI.U,3)), "name" = c("Before OR", "After OR"))
+
+fig7 <- plot_ly(type='scatter', mode='markers', width = 300, height = 300)
+
+fig7 <- fig7 %>% add_markers(opacity=0.7, 
+x= c(0.25, 0.75),
+y=older_effect$es, 
+error_y=list(type = "data" , array = array(older_effect$ci_up - older_effect$es),  color='rgba(2,56,88, 0.9)'),
+marker=list(color='rgba(2,56,88, 0.9)', line = list(color = 'rgba(2,56,88, 0.9)', width = 1), size = 15),
+showlegend=F)
+
+fig7 <- fig7 %>% layout(yaxis = list(title = "Hedges' G", range = c(-0.2, 1.5)), xaxis = list(title = '', range = c(0,1), tickvals = c(0.25, 0.75), ticktext = older_effect$name), title = " ")
+```
+
+*Subplot 2: Older adults, All measures, combining boxplots and point estimates before and after outlier removal*
+```{r older adults summary plot, warning=FALSE, echo=FALSE}
+# boxplot and point estimate
+fig8 <- subplot(fig6, fig7, nrows = 2, margin = c(0.03, 0.03, 0.02, 0.03), shareY = TRUE)
+fig8 <- fig8 %>% layout(showlegend = FALSE, yaxis = list(title = "Hedges' G"))
+fig8 <- fig8 %>% layout(width = 300,
+                      height = 600)
+fig8
+```
+
+*Subplot 3: Clinical populations, All functional outcomes, Outliers identified, Forest plot* 
+```{r clinical functional outcomes, warning=FALSE, echo=FALSE}
+
+# RVE model for all functional outcomes in clinical studies
+model_clin_cog<- robu(formula = y ~ 1, data = subset(mlm.clin, dv != "clinical score"), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+# RVE model after removing outliers
+model_rma <- rma.uni(y, v, weights = model_clin_cog$data.full$r.weights, data = subset(mlm.clin, dv != "clinical score"))
+rstud <- rstudent(model_rma)
+outliers_clin <- model_clin_cog$data$experiment[abs(rstud$z) >= 1.96]
+model_clin_cog_out <- robu(formula = y ~ 1, data= subset(mlm.clin, dv != "clinical score" & !experiment %in% outliers_clin), studynum = ID, var.eff.size = v, rho = .8, small = TRUE)
+
+print(outliers_clin)
+# outliers identified: "Del Felice (2015) 1b" "Ladenbauer (2017) 1b", Location: 9, 24 checked in the output of the get_data function
+
+fig10 <- forest_plotly(get_data(model_clin_cog, model_clin_cog_out, 2.5), '', domain_color = 'rgba(82,56,88, 0.9)', total_effect = TRUE,  outs <- c(9, 24))
+
+fig10 <- fig10 %>% layout(annotations = list(x = 0.43 , y = 1.0, text = "Clinical populations", showarrow = F, xref='paper',
+                                         yref='paper', xanchor = "center", 
+                                         yanchor = "bottom", font = list(size = 12)),
+                                         xaxis = list(title = '', range = c(-1.5, 2)),
+                                         width = 300,
+                                         height = 600) 
+```
+
+*Subplot 4a: Clinical populations, All functional outcomes, Boxplot before and after outlier removal*
+```{r clinical populations boxplot, warning = FALSE, echo =FALSEFALSE}
+
+fig11 <- plot_ly(y = model_clin_cog$data$y, type = "box", boxpoints = "all", name = "Before OR", jitter = 0, pointpos = -1.8, marker = list(color =  'rgba(82,56,88, 0.9)'), line = list(color = 'rgba(82,56,88, 0.9)'), width = 300, height = 300)
+
+fig11 <- fig11 %>% layout(yaxis = list(title = "Hedges' G", range=c(-0.6, 1.7)),
+                        colorway = 'rgba(82,56,88, 0.9)', showlegend = FALSE)
+
+fig11 <- fig11 %>% add_trace(y = model_clin_cog_out$data$y, name = "After OR", marker = list(color =  'rgba(82,56,88, 0.9)'), line = list(color = 'rgba(82,56,88, 0.9)'))
+
+```
+
+*Subplot 4b: Clinical populations, All functional outcomes, Point estimates before and after outlier removal*
+```{r clinical populations point estimate, warning = FALSE, echo = FALSE}
+
+clinical_effect <- data.frame("es" = c(round(model_clin_cog$reg_table$b.r,3), round(model_clin_cog_out$reg_table$b.r,3)), "ci_up" = c(round(model_clin_cog$reg_table$CI.U, 3), round(model_clin_cog_out$reg_table$CI.U,3)), "name" = c("Before OR", "After OR"))
+
+fig12 <- plot_ly(type='scatter', mode='markers', width = 300, height = 300)
+
+fig12 <- fig12 %>% add_markers(opacity=0.7, 
+x= c(0.25, 0.75),
+y=clinical_effect$es, 
+error_y=list(type = "data" , array = array(clinical_effect$ci_up - clinical_effect$es),  color='rgba(82,56,88, 0.9)'),
+marker=list(color='rgba(82,56,88, 0.9)', line = list(color = 'rgba(82,56,88, 0.9)', width = 1), size = 15),
+showlegend=F)
+
+fig12 <- fig12 %>% layout(yaxis = list(title = "Hedges' G", range = c(-0.2, 1.5)), xaxis = list(title = '', range = c(0,1), tickvals = c(0.25, 0.75), ticktext = clinical_effect$name), title = " ")
+```
+
+*Subplot 4: Clinical populations, All functional outcomes, combining boxplots and point estimates before and after outlier removal*
+```{r clinical adults summary plot, warning=FALSE, echo=FALSE}
+# boxplot and point estimate
+fig13 <- subplot(fig11, fig12, nrows = 2, margin = c(0.03, 0.03, 0.02, 0.03), shareY = TRUE) 
+fig13 <- fig13 %>% layout(showlegend = FALSE, yaxis = list(title = "Hedges' G"))
+fig13 <- fig13 %>% layout(width = 300,
+                      height = 600)
+fig13
+```
+
+*Figure8: Combining forest plots, boxplot and point estimates for older adults and clinical populations into one figure*
+```{r older and clinical populations final summary plot, warning = FALSE, echo = FALSE}
+# final subplot including forest plot
+#fig14 <- subplot(fig5, fig8, fig10, fig13, nrows = 1, margin = c(0.01,0.08,0.02,0.002), shareY = TRUE)
+#fig14 <- fig14 %>% layout(width = 1200,height = 600)
+
+fig15 <- subplot(fig5, fig8, fig10, nrows = 1, margin = c(0.01,0.08,0.02), shareY = TRUE)
+fig15 <- fig15 %>% layout(width = 1200,
+                          height = 600)
+fig15
+
+#htmlwidgets::saveWidget(as_widget(fig14), paste0(directory, "/Results/FigureOutputs/SummaryOlderClinical.html"))
+
+#orca(fig14, "/Results/FigureOutputs/SummaryOlderClinical.svg", width = 1200, height = 600)
+
+```
